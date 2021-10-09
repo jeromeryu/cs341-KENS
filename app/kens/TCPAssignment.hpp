@@ -18,11 +18,27 @@
 
 namespace E {
 
-struct DataHolder{
-  public:
-    int fd;
-    struct sockaddr_in addr;
-	  socklen_t addrlen;
+struct Accept
+{
+	UUID syscallUUID;
+	int pid;
+  int fd;
+	struct sockaddr *addr;
+	socklen_t *addrlen;
+};
+
+enum SocketState{CLOSED, LISTEN, SYN_RCVD, SYN_SENT, ESTABLISHED};
+
+struct Socket{
+  int fd;
+  int pid;
+  struct sockaddr_in addr;
+  socklen_t addrlen;
+  SocketState state;
+  int backlog;
+  struct sockaddr_in dstaddr;
+  socklen_t dstaddrlen;
+  uint32_t seq;
 };
 
 class TCPAssignment : public HostModule,
@@ -39,13 +55,16 @@ public:
   virtual ~TCPAssignment();
 
   //std::map<int, DataHolder> socketMap;
-  std::list<DataHolder> socketList;
+  std::list<Socket> socketList;
+  std::list<Accept> acceptList;
 
   void syscall_socket(UUID syscallUUID, int pid, int domain, int type__unused, int protocol);
   void syscall_close(UUID syscallUUID, int pid, int fd);
   void syscall_bind(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t addrlen);
   void syscall_getsockname(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen);
-
+  void syscall_connect(UUID syscallUUID, int pid, int sockfd, const struct sockaddr *addr, socklen_t addrlen);
+  void syscall_accept(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+  void syscall_listen(UUID syscallUUID, int pid, int sockfd, int backlog);
 
 protected:
   virtual void systemCallback(UUID syscallUUID, int pid,
