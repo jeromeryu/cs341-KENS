@@ -140,10 +140,7 @@ protected:
       addr.sin_addr.s_addr = inet_addr(env["CONNECT_ADDR"].c_str());
       addr.sin_port = htons(atoi(env["CONNECT_PORT"].c_str()));
 
-
-      std::cout<<"@@@@@@@@@@@@@@@@@@@@@@@ client conn "<<addr.sin_addr.s_addr<<" "<< addr.sin_port<<std::endl;
       int ret = connect(client_socket, (struct sockaddr *)&addr, len);
-      std::cout<<"@@@@@@@@@@@@@@@@@@@@@@@ conn "<<ret<<std::endl;
 
       if (ret == 0) {
         struct sockaddr_in temp_addr;

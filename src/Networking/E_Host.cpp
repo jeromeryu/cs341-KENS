@@ -428,7 +428,6 @@ void SystemCallApplication::initialize() { start(); }
 int SystemCallApplication::E_Syscall(
     const SystemCallInterface::SystemCallParameter &param) {
   if (!this->host.isRunning()){
-    std::cout<<"host not running"<<std::endl;
     return -1;
   }
 

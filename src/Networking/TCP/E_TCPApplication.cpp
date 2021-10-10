@@ -82,7 +82,6 @@ int TCPApplication::connect(int sockfd, const struct sockaddr *addr,
   param.param2_ptr = (void *)addr;
   param.param3_int = addrlen;
   param.syscallNumber = SystemCallInterface::SystemCall::CONNECT;
-  std::cout<<"connect syscall run "<<std::endl;
   int ret = E_Syscall(param);
   return ret;
 }
