@@ -67,10 +67,8 @@ protected:
       struct sockaddr_in client_addr;
       socklen_t client_len = sizeof(client_addr);
       memset(&client_addr, 0, client_len);
-      std::cout<<"accept@@@@@@@@@@@@@@"<<std::endl;
       int client_fd =
           accept(server_socket, (struct sockaddr *)&client_addr, &client_len);
-      std::cout<<"accept@@@@@@@@@@@@@@ "<<client_fd <<std::endl;
 
       if (client_fd >= 0) {
         EXPECT_EQ(client_len, sizeof(client_addr));

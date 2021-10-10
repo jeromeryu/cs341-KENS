@@ -48,6 +48,7 @@ struct Socket{
   struct sockaddr_in dstaddr;
   socklen_t dstaddrlen;
   uint32_t seq;
+  UUID syscallUUID;
 };
 
 class TCPAssignment : public HostModule,
@@ -75,6 +76,7 @@ public:
   void syscall_connect(UUID syscallUUID, int pid, int sockfd, const struct sockaddr *addr, socklen_t addrlen);
   void syscall_accept(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen);
   void syscall_listen(UUID syscallUUID, int pid, int sockfd, int backlog);
+  void syscall_getpeername(UUID syscallUUID, int pid, int sockfd, struct sockaddr *addr, socklen_t *addrlen);
 
 protected:
   virtual void systemCallback(UUID syscallUUID, int pid,
