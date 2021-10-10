@@ -67,8 +67,11 @@ protected:
       struct sockaddr_in client_addr;
       socklen_t client_len = sizeof(client_addr);
       memset(&client_addr, 0, client_len);
+      std::cout<<"accept@@@@@@@@@@@@@@"<<std::endl;
       int client_fd =
           accept(server_socket, (struct sockaddr *)&client_addr, &client_len);
+      std::cout<<"accept@@@@@@@@@@@@@@ "<<client_fd <<std::endl;
+
       if (client_fd >= 0) {
         EXPECT_EQ(client_len, sizeof(client_addr));
         EXPECT_EQ(client_addr.sin_family, AF_INET);
@@ -140,7 +143,7 @@ protected:
       addr.sin_port = htons(atoi(env["CONNECT_PORT"].c_str()));
 
 
-      std::cout<<"@@@@@@@@@@@@@@@@@@@@@@@ conn"<<std::endl;
+      std::cout<<"@@@@@@@@@@@@@@@@@@@@@@@ client conn "<<addr.sin_addr.s_addr<<" "<< addr.sin_port<<std::endl;
       int ret = connect(client_socket, (struct sockaddr *)&addr, len);
       std::cout<<"@@@@@@@@@@@@@@@@@@@@@@@ conn "<<ret<<std::endl;
 

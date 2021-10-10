@@ -28,7 +28,7 @@ private:
   const size_t bufferSize;
   size_t dataSize;
 
-  const UUID packetID;
+//  const UUID packetID;
 
   static std::unordered_set<UUID> packetUUIDSet;
   static UUID packetUUIDStart;
@@ -36,6 +36,10 @@ private:
   static void freePacketUUID(UUID uuid);
 
 public:
+
+  const UUID packetID;
+
+
   /**
    * Copy constructor. (Copied packet has same UUID)
    * @param other Packet to copy.

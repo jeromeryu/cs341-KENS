@@ -18,6 +18,15 @@
 
 namespace E {
 
+
+struct Connection
+{
+	int fd;
+	int pid;
+	int cnt;
+};
+
+
 struct Accept
 {
 	UUID syscallUUID;
@@ -57,6 +66,7 @@ public:
   //std::map<int, DataHolder> socketMap;
   std::list<Socket> socketList;
   std::list<Accept> acceptList;
+  std::list<Connection> connectionList;
 
   void syscall_socket(UUID syscallUUID, int pid, int domain, int type__unused, int protocol);
   void syscall_close(UUID syscallUUID, int pid, int fd);

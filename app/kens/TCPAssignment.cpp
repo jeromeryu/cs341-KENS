@@ -55,6 +55,9 @@ void TCPAssignment::syscall_bind(UUID syscallUUID, int pid, int sockfd, struct s
   in_port_t port = ((struct sockaddr_in *)addr)->sin_port;
   in_addr_t ip_addr = ((struct sockaddr_in *)addr)->sin_addr.s_addr;
 
+  std::cout<<"ip "<<ip_addr<<std::endl;
+
+
   std::list<Socket>::iterator it;
   for(it = socketList.begin(); it != socketList.end(); ++it){
     std::cout<<it->addr.sin_addr.s_addr<<std::endl;
@@ -76,8 +79,8 @@ void TCPAssignment::syscall_bind(UUID syscallUUID, int pid, int sockfd, struct s
   socket.pid = pid;
   memcpy(&socket.addr, addr, addrlen);
   socket.state = SocketState::CLOSED;
-  std::cout<<"bind "<< socket.state<<std::endl;
   if(ret!=-1){
+    std::cout<<"bind "<< socket.addr.sin_addr.s_addr <<" " << socket.addr.sin_port<<std::endl;
     socketList.push_back(socket);
   }
   this->returnSystemCall(syscallUUID, ret);
@@ -103,8 +106,8 @@ void TCPAssignment::syscall_getsockname(UUID syscallUUID, int pid, int sockfd, s
 
 void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int sockfd, const struct sockaddr *addr, socklen_t addrlen){
   int ret = 0;
-
-
+  std::cout<<"syscall connect"<<std::endl;
+  assert(1 == 0);
   uint8_t* tmp = (uint8_t*)(&((sockaddr_in*)addr)->sin_addr.s_addr);
   ipv4_t dstip;
   for(int i=0; i<4; i++){
@@ -135,10 +138,15 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int sockfd, const
   socketList.push_back(socket);
   //socket = socketList.back();
 
+  
 	Packet synPacket = Packet(54);
 
   int tcp_start = 34;
   int ip_start = 14;
+
+
+  std::cout<<"syn src "<<socket.addr.sin_addr.s_addr << " "<<socket.addr.sin_port<<std::endl;
+  std::cout<<"syn dst "<<socket.dstaddr.sin_addr.s_addr << " "<<socket.dstaddr.sin_port<<std::endl;
 
   synPacket.writeData(ip_start + 12, &socket.addr.sin_addr.s_addr, 4);
   synPacket.writeData(ip_start + 16, &socket.dstaddr.sin_addr.s_addr, 4);
@@ -153,6 +161,7 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int sockfd, const
 	uint16_t buf1 = 0;
   buf1 += 5 << 12; 
   buf1 +=  1 << 1; // SYN
+
   buf1 = htons(buf1);
   synPacket.writeData(tcp_start+12, (uint8_t*)&(buf1), 2);
   buf1 = htons(51200);
@@ -175,7 +184,7 @@ void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int sockfd, struct
   std::list<Socket>::iterator it;
   bool exist = false;
   for(it = socketList.begin(); it != socketList.end(); ++it){
-    if(it->state==ESTABLISHED && it->fd==sockfd){
+    if(it->state==ESTABLISHED && it->fd==sockfd && it->pid == pid){
       exist = true;
       break;
     }
@@ -203,7 +212,9 @@ void TCPAssignment::syscall_accept(UUID syscallUUID, int pid, int sockfd, struct
     a.pid = pid;
     a.addr = addr;
     a.addrlen = addrlen;
+    a.syscallUUID = syscallUUID;
     acceptList.push_back(a);
+    std::cout<<"accept add to queue"<<std::endl;
   }
 }
 
@@ -225,6 +236,11 @@ void TCPAssignment::syscall_listen(UUID syscallUUID, int pid, int sockfd, int ba
     it->state = SocketState::LISTEN;
     it->backlog = backlog;
 
+    struct Connection c;
+    c.pid = pid;
+    c.fd = sockfd;
+    c.cnt = backlog;
+    connectionList.push_back(c);
 
     returnSystemCall(syscallUUID, 0);
   } else {
@@ -296,6 +312,12 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
   // (void)fromModule;
   // (void)packet;
 
+  
+    uint8_t flags;
+		packet.readData(34+13, &flags, 1);
+    //std::cout<<"packet flag "<<packet.packetID<<" "<<(int)flags<<std::endl;
+  //std::cout<<"packet check "<<fromModule<<" "<<packet.packetID<<" " << (flags & (1<<4))<<" "<<(flags & (1<<1))<<std::endl;
+
 	if(fromModule.compare("IPv4") == 0){
     int tcp_start = 34;
     int ip_start = 14;
@@ -306,18 +328,28 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
     packet.readData(ip_start+12, &srcip, 4);
     packet.readData(ip_start+16, &dstip, 4);
 
+
+		uint8_t buf20[20];
+		packet.readData(tcp_start+0, buf20, 20);
+		uint16_t cs = NetworkUtil::tcp_sum(srcip, dstip, (uint8_t*)buf20, 20);
+		if(cs!=0xFFFF){
+      std::cout<<"wrong checksum "<<cs<<std::endl;
+			//freePacket(packet);
+			return;
+		}
+
+
   	uint8_t tcpheader[20];
     packet.readData(tcp_start, tcpheader, 20);
 
-    uint8_t flags;
-		packet.readData(tcp_start+13, &flags, 1);
-    
 		uint32_t ack;
 		packet.readData(tcp_start+8, &ack, 4);
 		ack = ntohl(ack);
 
 		std::list<Socket>::iterator it;
     bool exist = false;
+
+
 
     if((~flags & (1<<4)) && (flags & (1<<1))){
       //SYN packet
@@ -333,73 +365,111 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
         return;
       }
 
-      std::cout<<"received syn packet"<<std::endl;
-      // Socket socket;
-      // socket.addr.sin_addr.s_addr = dstip;
-      // socket.addr.sin_port = dstport;
-      // socket.addr.sin_family = AF_INET;
-      // socket.addrlen = sizeof(socket.addr);
-      // socket.dstaddr.sin_addr.s_addr = srcip;
-      // socket.dstaddr.sin_port = srcport;
-      // socket.dstaddr.sin_family = AF_INET;
-      // socket.dstaddrlen = sizeof(socket.dstaddr);
-      // socket.state = SocketState::SYN_RCVD;
-      // socketList.push_back(socket);
-      //it->state == SocketState::SYN_RCVD;
 
-      it->dstaddr.sin_addr.s_addr = srcip;
-      it->dstaddr.sin_port = srcport;
-      it->dstaddr.sin_family = AF_INET;
-      it->dstaddrlen = sizeof(it->dstaddr);
+      bool exist_conn = false;
+      std::list<Connection>::iterator it_conn;
+      for(it_conn=connectionList.begin(); it_conn != connectionList.end(); it_conn ++){
+        if(it_conn->fd == it->fd && it_conn->pid == it->pid){
+          exist_conn = true;
+          break;
+        }
+      }
+      if(!exist_conn){
+        return;
+      }
+      if(it_conn->cnt <= 0){
+        return;
+      }
+      it_conn->cnt -= 1;
+
+      std::cout<<"syn packet arrivec "<<std::endl;
+
+
+      Socket socket;
+      socket.addr.sin_addr.s_addr = dstip;
+      socket.addr.sin_port = dstport;
+      socket.addr.sin_family = AF_INET;
+      socket.addrlen = sizeof(socket.addr);
+      socket.dstaddr.sin_addr.s_addr = srcip;
+      socket.dstaddr.sin_port = srcport;
+      socket.dstaddr.sin_family = AF_INET;
+      socket.dstaddrlen = sizeof(socket.dstaddr);
+      socketList.push_back(socket);
+
+      std::cout<<"synack src "<<socket.addr.sin_addr.s_addr << " "<<socket.addr.sin_port<<std::endl;
+      std::cout<<"synack dst "<<socket.dstaddr.sin_addr.s_addr << " "<<socket.dstaddr.sin_port<<std::endl;
+
 
 			uint32_t newack;
 			packet.readData(tcp_start+4, &newack, 4);
+      std::cout<<"ack1 : "<<newack<<std::endl;
+
 			newack = ntohl(newack);
+      std::cout<<"ack2 : "<<newack<<std::endl;
+
 			newack++;
+      std::cout<<"ack3 : "<<newack<<std::endl;
 			newack = htonl(newack);
+      std::cout<<"ack4 : "<<newack<<std::endl;
+
+
+
 
       Packet newPacket(54);
 
-      newPacket.writeData(ip_start + 12, &it->addr.sin_addr.s_addr, 4);
-      newPacket.writeData(ip_start + 16, &it->dstaddr.sin_addr.s_addr, 4);
-      newPacket.writeData(tcp_start, &it->addr.sin_port, 2);
-      newPacket.writeData(tcp_start+2, &it->dstaddr.sin_port, 2);
+      packet.writeData(ip_start + 12, (uint8_t*)&socket.addr.sin_addr.s_addr, 4);
+      packet.writeData(ip_start + 16, (uint8_t*)&socket.dstaddr.sin_addr.s_addr, 4);
+      
+      packet.writeData(tcp_start, (uint8_t*)&socket.addr.sin_port, 2);
+      packet.writeData(tcp_start+2, (uint8_t*)&socket.dstaddr.sin_port, 2);
 
       srand((unsigned int)time(NULL));
-      it->seq = rand();
-      uint32_t seq = htonl(it->seq);
-      newPacket.writeData(tcp_start+4, &seq, 4); //seq
+      socket.seq = rand();
+      uint32_t seq = htonl(socket.seq);
+      packet.writeData(tcp_start+4, &seq, 4); //seq
 
-      newPacket.writeData(tcp_start+8, (uint8_t*)&newack, 4); //ack
+      packet.writeData(tcp_start+8, (uint8_t*)&newack, 4); //ack
 
 
       uint16_t buf1 = 0;
-      buf1 += 5 << 12; 
+      /*buf1 += 5 << 12; 
       buf1 +=  1 << 4; // ACK
       buf1 += 1 << 1; //SYN
       buf1 = htons(buf1);
-      newPacket.writeData(tcp_start+12, (uint8_t*)&(buf1), 2);
+      packet.writeData(tcp_start+12, (uint8_t*)&(buf1), 2);
       buf1 = htons(51200);
-      newPacket.writeData(tcp_start+14, (uint8_t*)&(buf1), 2); //window size
-      
+      packet.writeData(tcp_start+14, (uint8_t*)&(buf1), 2); //window size
+      */
+      flags += 1<<4;
+      packet.writeData(tcp_start+13, &flags, 1);
+
+
       uint8_t buf2[20];
-      newPacket.readData(tcp_start, buf2, 20);
-      buf1 = NetworkUtil::tcp_sum(it->addr.sin_addr.s_addr, it->dstaddr.sin_addr.s_addr, (uint8_t*)buf2, 20);
+      packet.readData(tcp_start, buf2, 20);
+      buf1 = NetworkUtil::tcp_sum(socket.addr.sin_addr.s_addr, socket.dstaddr.sin_addr.s_addr, (uint8_t*)buf2, 20);
       buf1 = ~buf1;
       buf1 = htons(buf1);
-      newPacket.writeData(tcp_start+16, (uint8_t*)&buf1, 2);
-      it->state = SYN_RCVD;
+
+      packet.writeData(tcp_start+16, (uint8_t*)&buf1, 2);
+      socket.state = SYN_RCVD;
       std::cout<<"send syn_ack packet"<<std::endl;
-      this->sendPacket("IPv4", std::move(newPacket)); //sendp packet
+
+      uint8_t flags_check;
+      packet.readData(tcp_start+13, &flags_check, 1);
+      std::cout<<"check "<<packet.packetID <<" "<<(flags_check & (1<<4)) << " " << (flags_check & (1<<1)) <<std::endl;
+
+
+      sendPacket("IPv4", std::move(packet)); //sendp packet
 
     } else if((flags & (1<<4)) && (flags & (1<<1))){
       //SYN ACK packet
+      std::cout<<"syn ack here"<<std::endl;
       for(it=socketList.begin(); it!=socketList.end(); it++){
         // std::cout<<"check 1 "<<it->addr.sin_port<<" "<<dstport<<std::endl;
         // std::cout<<"check 2 "<<it->addr.sin_addr.s_addr<<" "<<dstip<<std::endl;
         // std::cout<<"check 3 "<<it->dstaddr.sin_port<<" "<<srcport<<std::endl;
         // std::cout<<"check 4 "<<it->dstaddr.sin_addr.s_addr<<" "<<srcip<<std::endl;
-        // std::cout<<"check 5 "<<it->state<<" "<<SocketState::SYN_SENT<<std::endl;
+        std::cout<<"check 5 "<<it->state<<" "<<SocketState::SYN_SENT<<std::endl;
         // break;
 
         if(it->addr.sin_port == dstport && it->addr.sin_addr.s_addr==dstip 
@@ -427,10 +497,10 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
 
       Packet newPacket(54);
 
-      newPacket.writeData(ip_start + 12, &it->addr.sin_addr.s_addr, 4);
-      newPacket.writeData(ip_start + 16, &it->dstaddr.sin_addr.s_addr, 4);
-      newPacket.writeData(tcp_start, &it->addr.sin_port, 2);
-      newPacket.writeData(tcp_start+2, &it->dstaddr.sin_port, 2);
+      newPacket.writeData(ip_start + 12, (uint8_t*)&it->addr.sin_addr.s_addr, 4);
+      newPacket.writeData(ip_start + 16, (uint8_t*)&it->dstaddr.sin_addr.s_addr, 4);
+      newPacket.writeData(tcp_start, (uint8_t*)&it->addr.sin_port, 2);
+      newPacket.writeData(tcp_start+2, (uint8_t*)&it->dstaddr.sin_port, 2);
 
       newPacket.writeData(tcp_start+8, (uint8_t*)&ack, 4); //ack
 
@@ -450,12 +520,11 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
       newPacket.writeData(tcp_start+16, (uint8_t*)&buf1, 2);
       it->state = ESTABLISHED;
       std::cout<<"send ack packet$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$"<<std::endl;
-      this->sendPacket("IPv4", std::move(newPacket)); 
+      sendPacket("IPv4", std::move(newPacket)); 
 
     } else if((flags & (1<<4)) && (~flags & (1<<1))){
       //ACK packet
-      std::cout<<"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!received ack packet"<<std::endl;
-
+      std::cout<<"ack pakcket here!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!1"<<std::endl;
       for(it=socketList.begin(); it!=socketList.end(); it++){
         if(it->addr.sin_port == dstport && it->addr.sin_addr.s_addr==dstip 
         && it->dstaddr.sin_port == srcport && it->dstaddr.sin_addr.s_addr == srcip
@@ -465,14 +534,31 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
         }
       }
       if(ack != it->seq +1){
-        std::cout<<"wrong seq"<<std::endl;
+        std::cout<<"wrong seq "<<ack <<" " <<it->seq + 1<<std::endl;
         return;
       }
       if(!exist){
         return;
       }
-      
+      std::cout<<"!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!received ack packet"<<std::endl;
+      std::cout<<"check new " <<(flags & (1<<4)) << " " << (flags & (1<<1)) <<std::endl;
+
       it->state == SocketState::ESTABLISHED;
+
+      bool exist_conn = false;
+      std::list<Connection>::iterator it_conn;
+      for(it_conn=connectionList.begin(); it_conn != connectionList.end(); it_conn ++){
+        if(it_conn->fd == it->fd && it_conn->pid == it->pid){
+          exist_conn = true;
+          break;
+        }
+      }
+      if(!exist_conn){
+        return;
+      }
+
+      it_conn->cnt += 1;
+
 
       bool exist2 = false;
       std::list<Accept>::iterator it2;
