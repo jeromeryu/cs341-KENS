@@ -387,7 +387,7 @@ TEST_F(TestEnv_Any, TestTransfer_Connect_Send_EOF) {
   this->runTest();
 }
 
-//---------
+// ---------
 
 TEST_F(TestEnv_Any, TestTransfer_Connect_Recv_Symmetric) {
   std::unordered_map<std::string, std::string> accept_env;

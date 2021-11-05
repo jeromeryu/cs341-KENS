@@ -69,7 +69,6 @@ protected:
       memset(&client_addr, 0, client_len);
       int client_fd =
           accept(server_socket, (struct sockaddr *)&client_addr, &client_len);
-
       if (client_fd >= 0) {
         EXPECT_EQ(client_len, sizeof(client_addr));
         EXPECT_EQ(client_addr.sin_family, AF_INET);
