@@ -73,7 +73,8 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd){
   newPacket.writeData(tcp_start, (uint8_t*)&closeSocket->addr.sin_port, 2);
   newPacket.writeData(tcp_start+2, (uint8_t*)&closeSocket->dstaddr.sin_port, 2);
 
-  uint32_t newseq = htonl(closeSocket->lastsendSeq);
+  // uint32_t newseq = htonl(closeSocket->lastsendSeq);
+  uint32_t newseq = htonl(closeSocket->nextsendSeq);
   uint32_t newack = htonl(closeSocket->lastsendAck);
 
   newPacket.writeData(tcp_start+4, (uint8_t*)&newseq, 4); //seq
@@ -103,6 +104,17 @@ void TCPAssignment::syscall_close(UUID syscallUUID, int pid, int fd){
     closeSocket->lastsendAck = ntohl(newack);
   }else if(closeSocket->state == SocketState::CLOSE_WAIT){
     closeSocket->state = SocketState::LAST_ACK;
+    // if(closeSocket->readWaiting){
+    //   size_t temp = closeSocket->readbuffersize;
+    //   for(int i=0; i < closeSocket->readbuffersize; i++){
+    //     uint8_t a = closeSocket->readbuffer->front();
+    //     memcpy((closeSocket->wait.buf+i), &a, 1);
+    //     closeSocket->readbuffer->pop_front();
+    //   }
+    //   closeSocket->readbuffersize = 0;
+    //   closeSocket->readWaiting = false;
+    //   returnSystemCall(closeSocket->wait.syscallUUID, temp);
+    // }
   }
   closeSocket->closesyscall = syscallUUID;
 
@@ -260,6 +272,7 @@ void TCPAssignment::syscall_connect(UUID syscallUUID, int pid, int sockfd, const
   retransmitPacket->state = PacketState::SYN;
   retransmitPacket->seq = ntohl(seq);
   retransmitPacket->ack = 0;
+  retransmitPacket->requiredack = 0;
   retransmitPacket->packetlist = new std::list<Packet>;
   retransmitPacket->packetlist->push_back(synPacket);
   retransmitPacket->sendTime = getCurrentTime();
@@ -420,8 +433,10 @@ void TCPAssignment::syscall_write(UUID syscallUUID, int pid, int fd, const void 
 
     if(it->lastdatasendSeq == 0){
       newseq = it->lastsendSeq;
+      it->nextsendSeq = it->lastsendSeq + sendsize;
     }else{
       newseq = it->lastdatasendSeq + sendsize;
+      it->nextsendSeq = newseq + sendsize;
     }
 
     it->lastdatasendAck = it->lastsendAck;
@@ -460,7 +475,22 @@ void TCPAssignment::syscall_write(UUID syscallUUID, int pid, int fd, const void 
     buf1 = htons(buf1);
     newPacket.writeData(tcp_start+16, (uint8_t*)&buf1, 2);
 
-    sendPacket("IPv4", std::move(newPacket));
+
+    struct packetdata *retransmitPacket = (struct packetdata *)malloc(sizeof(struct packetdata));
+    retransmitPacket->state = PacketState::ACK;
+    retransmitPacket->seq = ntohl(newseq);
+    retransmitPacket->ack = ntohl(newack);
+    retransmitPacket->requiredack = ntohl(newseq) + sendsize;
+    retransmitPacket->packetlist = new std::list<Packet>;
+    retransmitPacket->packetlist->push_back(newPacket);
+    retransmitPacket->sendTime = getCurrentTime();
+
+    this->sendPacket("IPv4", std::move(newPacket)); //sendp packet
+
+
+    Time retrans = E::TimeUtil::makeTime(it->TimeoutInterval / 1000000, E::TimeUtil::stringToTimeUnit("msec"));
+    retransmitPacket->timersyscall = addTimer((Socket *) &(*it), retrans);
+    it->retransmit->push_back(*retransmitPacket);
   }
 
 
@@ -522,7 +552,6 @@ void TCPAssignment::systemCallback(UUID syscallUUID, int pid,
 }
 
 void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
-
 
   Time receiveTime = getCurrentTime();
 
@@ -645,6 +674,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
         retransmitPacket->state = PacketState::SYNACK;
         retransmitPacket->seq = ntohl(seq);
         retransmitPacket->ack = ntohl(newack);
+        retransmitPacket->requiredack = 0;
         retransmitPacket->packetlist = new std::list<Packet>;
         retransmitPacket->packetlist->push_back(newPacket);
         retransmitPacket->sendTime = getCurrentTime();
@@ -728,6 +758,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
         retransmitPacket->state = PacketState::SYNACK;
         retransmitPacket->seq = ntohl(seq);
         retransmitPacket->ack = ntohl(newack);
+        retransmitPacket->requiredack = 0;
         retransmitPacket->packetlist = new std::list<Packet>;
         retransmitPacket->packetlist->push_back(newPacket);
         retransmitPacket->sendTime = getCurrentTime();
@@ -818,7 +849,7 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
       for(it=socketList.begin(); it!=socketList.end(); it++){
         if(it->addr.sin_port == dstport && it->addr.sin_addr.s_addr==dstip 
         && it->dstaddr.sin_port == srcport && it->dstaddr.sin_addr.s_addr == srcip){
-          if(it->state == SocketState::ESTABLISHED){
+          if(it->state == SocketState::ESTABLISHED || it->state == SocketState::CLOSE_WAIT){
             ackpacket = AckPacketState::ACK_DATA;
           }else if(it->state == SocketState::SYN_RCVD){
             ackpacket = AckPacketState::ACK_SYN_RCVD;
@@ -834,68 +865,104 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
       }
       if((ackpacket == AckPacketState::ACK_DATA) && (total_length > 20)){
 
-        Packet newPacket(54);
-        newPacket.writeData(ip_start + 12, (uint8_t*)&it->addr.sin_addr.s_addr, 4);
-        newPacket.writeData(ip_start + 16, (uint8_t*)&it->dstaddr.sin_addr.s_addr, 4);
-        newPacket.writeData(tcp_start, (uint8_t*)&it->addr.sin_port, 2);
-        newPacket.writeData(tcp_start+2, (uint8_t*)&it->dstaddr.sin_port, 2);
+        // seq num check
+        uint32_t seqcheck;
+        packet.readData(tcp_start+4, &seqcheck, 4);
+        seqcheck = ntohl(seqcheck);
+        bool properpacket = true;
 
-        uint32_t newseq;
-        packet.readData(tcp_start+8, &newseq, 4);
-        uint32_t newack;
-        packet.readData(tcp_start+4, &newack, 4);
-        uint16_t total_length;
-        packet.readData(ip_start+2, &total_length, 2);
-        total_length = ntohs(total_length);
-        total_length -= 40;
-        newack = ntohl(newack);
-        newack += total_length;
-        newack = htonl(newack);
-
-        newPacket.writeData(tcp_start+4, (uint8_t*)&newseq, 4); //seq
-        newPacket.writeData(tcp_start+8, (uint8_t*)&newack, 4); //ack
-
-
-        uint16_t buf1 = 0;
-        buf1 += 5 << 12; 
-        buf1 +=  1 << 4; // ACK
-        buf1 = htons(buf1);
-        newPacket.writeData(tcp_start+12, (uint8_t*)&(buf1), 2);
-        buf1 = htons(51200);
-        newPacket.writeData(tcp_start+14, (uint8_t*)&(buf1), 2); //window size
-          
-        uint8_t buf2[20];
-        newPacket.readData(tcp_start, buf2, 20);
-        buf1 = NetworkUtil::tcp_sum(it->addr.sin_addr.s_addr, it->dstaddr.sin_addr.s_addr, (uint8_t*)buf2, 20);
-        buf1 = ~buf1;
-        buf1 = htons(buf1);
-        newPacket.writeData(tcp_start+16, (uint8_t*)&buf1, 2);
-
-
-        uint8_t bufdata[total_length];
-        packet.readData(tcp_start+20, bufdata, total_length);
-
-        for(int i=0; i < total_length; i++){
-          uint8_t a = bufdata[i];
-          it->readbuffer->push_back(a);
-          it->readbuffersize++;
-        }
-
-        if(it->readWaiting && (it->readbuffersize >= it->wait.count)){
-          for(int i=0; i < it->wait.count; i++){
-            uint8_t a = it->readbuffer->front();
-            memcpy((it->wait.buf+i), &a, 1);
-            it->readbuffer->pop_front();
-            it->readbuffersize--;
+        std::list<packetdata>::iterator find;
+        for(find = it->retransmit->begin(); find != it->retransmit->end(); find++){
+          if(find->state == PacketState::ACK){
+            if(seqcheck != find->ack){
+              Packet synPacket = find->packetlist->front();
+              this->sendPacket("IPv4", std::move(synPacket));
+              properpacket = false;
+              break;
+            }else{
+              it->retransmit->erase(find);
+              break;
+            }
           }
-          it->readWaiting = false;
-          returnSystemCall(it->wait.syscallUUID, it->wait.count);
+        }
+
+        if(properpacket){
+          Packet newPacket(54);
+          newPacket.writeData(ip_start + 12, (uint8_t*)&it->addr.sin_addr.s_addr, 4);
+          newPacket.writeData(ip_start + 16, (uint8_t*)&it->dstaddr.sin_addr.s_addr, 4);
+          newPacket.writeData(tcp_start, (uint8_t*)&it->addr.sin_port, 2);
+          newPacket.writeData(tcp_start+2, (uint8_t*)&it->dstaddr.sin_port, 2);
+
+          uint32_t newseq;
+          packet.readData(tcp_start+8, &newseq, 4);
+          uint32_t newack;
+          packet.readData(tcp_start+4, &newack, 4);
+          uint16_t total_length;
+          packet.readData(ip_start+2, &total_length, 2);
+          total_length = ntohs(total_length);
+          total_length -= 40;
+          newack = ntohl(newack);
+          newack += total_length;
+          newack = htonl(newack);
+
+          newPacket.writeData(tcp_start+4, (uint8_t*)&newseq, 4); //seq
+          newPacket.writeData(tcp_start+8, (uint8_t*)&newack, 4); //ack
+
+
+          uint16_t buf1 = 0;
+          buf1 += 5 << 12; 
+          buf1 +=  1 << 4; // ACK
+          buf1 = htons(buf1);
+          newPacket.writeData(tcp_start+12, (uint8_t*)&(buf1), 2);
+          buf1 = htons(51200);
+          newPacket.writeData(tcp_start+14, (uint8_t*)&(buf1), 2); //window size
+            
+          uint8_t buf2[20];
+          newPacket.readData(tcp_start, buf2, 20);
+          buf1 = NetworkUtil::tcp_sum(it->addr.sin_addr.s_addr, it->dstaddr.sin_addr.s_addr, (uint8_t*)buf2, 20);
+          buf1 = ~buf1;
+          buf1 = htons(buf1);
+          newPacket.writeData(tcp_start+16, (uint8_t*)&buf1, 2);
+
+
+          uint8_t bufdata[total_length];
+          packet.readData(tcp_start+20, bufdata, total_length);
+
+          for(int i=0; i < total_length; i++){
+            uint8_t a = bufdata[i];
+            it->readbuffer->push_back(a);
+            it->readbuffersize++;
+          }
+
+          if(it->readWaiting && (it->readbuffersize >= it->wait.count)){
+            for(int i=0; i < it->wait.count; i++){
+              uint8_t a = it->readbuffer->front();
+              memcpy((it->wait.buf+i), &a, 1);
+              it->readbuffer->pop_front();
+              it->readbuffersize--;
+            }
+            it->readWaiting = false;
+            returnSystemCall(it->wait.syscallUUID, it->wait.count);
+          }
+
+
+
+          struct packetdata *retransmitPacket = (struct packetdata *)malloc(sizeof(struct packetdata));
+          retransmitPacket->state = PacketState::ACK;
+          retransmitPacket->seq = ntohl(newseq);
+          retransmitPacket->ack = ntohl(newack);
+          retransmitPacket->requiredack = 0;
+          retransmitPacket->packetlist = new std::list<Packet>;
+          retransmitPacket->packetlist->push_back(newPacket);
+          retransmitPacket->sendTime = getCurrentTime();
+
+          sendPacket("IPv4", std::move(newPacket));
+
+          it->retransmit->push_back(*retransmitPacket);
         }
 
 
-        sendPacket("IPv4", std::move(newPacket));
-        
-
+      }else if(ackpacket == AckPacketState::ACK_DATA){
 
       }else if(ackpacket == AckPacketState::ACK_SYN_RCVD){
         for(it=socketList.begin(); it!=socketList.end(); it++){
@@ -987,7 +1054,39 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
         packet.readData(tcp_start+8, &ack, 4);
         ack = ntohl(ack);
 
+        std::list<packetdata>::iterator find;
+        for(find = it->retransmit->begin(); find != it->retransmit->end(); find++){
+          if(find->state == PacketState::ACK && find->requiredack == ack){
+            it->SampleRTT = (receiveTime - find->sendTime) ;
+            cancelTimer(find->timersyscall);
+            delete find->packetlist;
+            it->retransmit->erase(find);
+            it->DevRTT = 0.75 * it->DevRTT + 0.25 * (it->EstimatedRTT > it->SampleRTT ? (it->EstimatedRTT - it->SampleRTT) : (it->SampleRTT - it->EstimatedRTT));
+            it->EstimatedRTT = 0.875 * it->EstimatedRTT + 0.125 * it->SampleRTT;  
+            it->TimeoutInterval = it->EstimatedRTT + 4 * it->DevRTT;
+            break;
+          }else if(find->state == PacketState::ACK && (find->requiredack < ack)){
+            it->SampleRTT = (receiveTime - find->sendTime) ;
+            cancelTimer(find->timersyscall);
+            delete find->packetlist;
+            it->retransmit->erase(find);
+            break;
+          }
+        }
+
+
         if((it->lastsendSeq+1 == ack) && (it->lastsendAck) == seq){
+          if(it->readWaiting){
+            size_t temp = it->readbuffersize;
+            for(int i=0; i < it->readbuffersize; i++){
+              uint8_t a = it->readbuffer->front();
+              memcpy((it->wait.buf+i), &a, 1);
+              it->readbuffer->pop_front();
+            }
+            it->readbuffersize = 0;
+            it->readWaiting = false;
+            returnSystemCall(it->wait.syscallUUID, temp);
+          }
           it->state = SocketState::FIN_WAIT2;
         }
       }else if(ackpacket == AckPacketState::ACK_CLOSING){
@@ -1059,6 +1158,18 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
         it->state = SocketState::CLOSING;
         sendPacket("IPv4", std::move(newPacket));
 
+        if(it->readWaiting){
+          size_t temp = it->readbuffersize;
+          for(int i=0; i < it->readbuffersize; i++){
+            uint8_t a = it->readbuffer->front();
+            memcpy((it->wait.buf+i), &a, 1);
+            it->readbuffer->pop_front();
+          }
+          it->readbuffersize = 0;
+          it->readWaiting = false;
+          returnSystemCall(it->wait.syscallUUID, temp);
+        }
+
 
       }else if(it->state == FIN_WAIT2){
         int tcp_start = 34;
@@ -1109,57 +1220,80 @@ void TCPAssignment::packetArrived(std::string fromModule, Packet &&packet) {
         int tcp_start = 34;
         int ip_start = 14;
 
-        Packet newPacket(54);
-        newPacket.writeData(ip_start + 12, (uint8_t*)&it->addr.sin_addr.s_addr, 4);
-        newPacket.writeData(ip_start + 16, (uint8_t*)&it->dstaddr.sin_addr.s_addr, 4);
-        newPacket.writeData(tcp_start, (uint8_t*)&it->addr.sin_port, 2);
-        newPacket.writeData(tcp_start+2, (uint8_t*)&it->dstaddr.sin_port, 2);
+        uint32_t seqcheck;
+        packet.readData(tcp_start+4, &seqcheck, 4);
+        seqcheck = ntohl(seqcheck);
 
-        uint32_t newseq;
-        packet.readData(tcp_start+8, &newseq, 4);
+        bool properpacket = true;
 
-        uint32_t newack;
-        packet.readData(tcp_start+4, &newack, 4);
-        newack = ntohl(newack);
-        newack++;
-        newack = htonl(newack);
-
-        newPacket.writeData(tcp_start+4, (uint8_t*)&newseq, 4); //seq
-        newPacket.writeData(tcp_start+8, (uint8_t*)&newack, 4); //ack
-
-
-        uint16_t buf1 = 0;
-        buf1 += 5 << 12; 
-        buf1 +=  1 << 4; //ACK
-        buf1 = htons(buf1);
-        newPacket.writeData(tcp_start+12, (uint8_t*)&(buf1), 2);
-        buf1 = htons(51200);
-        newPacket.writeData(tcp_start+14, (uint8_t*)&(buf1), 2); //window size
-          
-        uint8_t buf2[20];
-        newPacket.readData(tcp_start, buf2, 20);
-        buf1 = NetworkUtil::tcp_sum(it->addr.sin_addr.s_addr, it->dstaddr.sin_addr.s_addr, (uint8_t*)buf2, 20);
-        buf1 = ~buf1;
-        buf1 = htons(buf1);
-        newPacket.writeData(tcp_start+16, (uint8_t*)&buf1, 2);
-
-        it->state = SocketState::CLOSE_WAIT;
-        it->lastsendSeq = ntohl(newseq);
-        it->lastsendAck = ntohl(newack);
-
-        if(it->readWaiting){
-          size_t temp = it->readbuffersize;
-          for(int i=0; i < it->readbuffersize; i++){
-            uint8_t a = it->readbuffer->front();
-            memcpy((it->wait.buf+i), &a, 1);
-            it->readbuffer->pop_front();
+        std::list<packetdata>::iterator find;
+        for(find = it->retransmit->begin(); find != it->retransmit->end(); find++){
+          if(find->state == PacketState::ACK){
+            if(seqcheck != find->ack){
+              Packet synPacket = find->packetlist->front();
+              this->sendPacket("IPv4", std::move(synPacket));
+              properpacket = false;
+              break;
+            }else{
+              it->retransmit->erase(find);
+              break;
+            }
           }
-          it->readbuffersize = 0;
-          it->readWaiting = false;
-          returnSystemCall(it->wait.syscallUUID, temp);
         }
+        
+        if(properpacket){
+          Packet newPacket(54);
+          newPacket.writeData(ip_start + 12, (uint8_t*)&it->addr.sin_addr.s_addr, 4);
+          newPacket.writeData(ip_start + 16, (uint8_t*)&it->dstaddr.sin_addr.s_addr, 4);
+          newPacket.writeData(tcp_start, (uint8_t*)&it->addr.sin_port, 2);
+          newPacket.writeData(tcp_start+2, (uint8_t*)&it->dstaddr.sin_port, 2);
 
-        sendPacket("IPv4", std::move(newPacket));
+          uint32_t newseq;
+          packet.readData(tcp_start+8, &newseq, 4);
+
+          uint32_t newack;
+          packet.readData(tcp_start+4, &newack, 4);
+          newack = ntohl(newack);
+          newack++;
+          newack = htonl(newack);
+
+          newPacket.writeData(tcp_start+4, (uint8_t*)&newseq, 4); //seq
+          newPacket.writeData(tcp_start+8, (uint8_t*)&newack, 4); //ack
+
+
+          uint16_t buf1 = 0;
+          buf1 += 5 << 12; 
+          buf1 +=  1 << 4; //ACK
+          buf1 = htons(buf1);
+          newPacket.writeData(tcp_start+12, (uint8_t*)&(buf1), 2);
+          buf1 = htons(51200);
+          newPacket.writeData(tcp_start+14, (uint8_t*)&(buf1), 2); //window size
+            
+          uint8_t buf2[20];
+          newPacket.readData(tcp_start, buf2, 20);
+          buf1 = NetworkUtil::tcp_sum(it->addr.sin_addr.s_addr, it->dstaddr.sin_addr.s_addr, (uint8_t*)buf2, 20);
+          buf1 = ~buf1;
+          buf1 = htons(buf1);
+          newPacket.writeData(tcp_start+16, (uint8_t*)&buf1, 2);
+
+          it->state = SocketState::CLOSE_WAIT;
+          it->lastsendSeq = ntohl(newseq);
+          it->lastsendAck = ntohl(newack);
+
+          if(it->readWaiting){
+            size_t temp = it->readbuffersize;
+            for(int i=0; i < it->readbuffersize; i++){
+              uint8_t a = it->readbuffer->front();
+              memcpy((it->wait.buf+i), &a, 1);
+              it->readbuffer->pop_front();
+            }
+            it->readbuffersize = 0;
+            it->readWaiting = false;
+            returnSystemCall(it->wait.syscallUUID, temp);
+          }
+
+          sendPacket("IPv4", std::move(newPacket));
+        }
       }
     }
   }
@@ -1209,8 +1343,18 @@ void TCPAssignment::timerCallback(std::any payload) {
         it->timersyscall = addTimer(a, retrans);
       }
     }
-
-
+  }else if(a->state == SocketState::ESTABLISHED || a->state == SocketState::CLOSE_WAIT || a->state == SocketState::FIN_WAIT1){
+    std::list<packetdata>::iterator it;
+    for(it = a->retransmit->begin(); it != a->retransmit->end(); it++){
+      if(it->state == PacketState::ACK){
+        Packet synPacket = it->packetlist->front();
+        this->sendPacket("IPv4", std::move(synPacket));
+        it->sendTime = getCurrentTime();
+        Time retrans = E::TimeUtil::makeTime(a->TimeoutInterval / 1000000, E::TimeUtil::stringToTimeUnit("msec"));
+        it->timersyscall = addTimer(a, retrans);
+        break;
+      }
+    }
   }
 }
 

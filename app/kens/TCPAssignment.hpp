@@ -51,6 +51,7 @@ struct packetdata{
   PacketState state;
   uint32_t seq;
   uint32_t ack;
+  uint32_t requiredack;
   std::list<Packet> *packetlist;
   Time sendTime;
   UUID timersyscall;
@@ -77,6 +78,7 @@ struct Socket{
   bool readWaiting;  // wait exist -> true
   uint32_t lastsendSeq;
   uint32_t lastsendAck;
+  uint32_t nextsendSeq;
   uint32_t lastdatasendSeq;
   uint32_t lastdatasendAck;
   UUID closesyscall;
