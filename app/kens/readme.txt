@@ -1,5 +1,6 @@
-#README for PA2
+#README for PA2, PA3
 
+# PA2
 # 3 extra structs are made
 Socket : for socket used in tcp 
 Accept : for managing asynchronous in accept syscall and receiving ack packet
@@ -30,3 +31,24 @@ We checked SYN and ACK bytes to check which type of packet arrived.
 SYN -> change socket state to SYN_RCVD and send SYN+ACK packet
 SYN+ACK -> change socket state to ESTABLISHED and send ACK packet
 ACK -> change socket state to ESTABLISHED
+
+#PA3
+# 2 extra structs are made
+readwait : buffer for read systemcall in socket
+packetdata : save packet data sent from socket. If properly responsed, it will be deleted. If time out, resend.
+
+# 2 additional Enum and edit SocketState
+SocketState: added state for closing (including simultaneous closing)
+AckPacketState: classify type of received Ack packet
+PacketState: classify type of packet sent from socket
+
+# socket
+1. 4 way handshaking implemented including simultaneous closing.
+2. read, write systemcall implemented.
+read : When Ack packet with data received, socket copies data into socket readbuffer. If there exists enough read buffer, copies data to destination and read systemcall returns.
+write: When write systemcall issued, socket copies data from source into socket write buffer and write systemcall returns immediatly. Socket checks the write buffer and send Ack packet with data.
+3. Unrealiable connection handling implemented.
+- check checksum.
+- check whether proper response packet arrived and if not, send packet again.
+- works well with 3 handshake connection, data transmission inclusing read write systemcall.
+4. TimeoutInterval implemented. 
