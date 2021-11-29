@@ -10,6 +10,9 @@
 #include <E/Networking/E_Networking.hpp>
 #include <E/Networking/E_TimerModule.hpp>
 #include <E/Networking/E_Wire.hpp>
+#include <netinet/in.h>
+#include <netinet/ip.h>
+#include <netinet/tcp.h>
 
 namespace E {
 
@@ -87,6 +90,9 @@ public:
     Size bps = this->getWireSpeed(port_num);
     return CostLCM / bps;
   }
+  
+  std::list<rip_entry_t> ripList;
+  Host *host;
 
   virtual void initialize();
   virtual void finalize();

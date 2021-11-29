@@ -166,14 +166,16 @@ protected:
         ipv4_t ip = routers[router_i]->getIPAddr(port_num).value();
         size_t cost_ret = std::any_cast<size_t>(
             routers[router_j]->diagnoseHostModule("UDP", ip));
+
         EXPECT_EQ(cost_ret, cost);
       }
       for (size_t port_num = 0; port_num < routers[router_j]->getPortCount();
            ++port_num) {
         ipv4_t ip = routers[router_j]->getIPAddr(port_num).value();
         size_t cost_ret = std::any_cast<size_t>(
-            routers[router_j]->diagnoseHostModule("UDP", ip));
+            routers[router_i]->diagnoseHostModule("UDP", ip));
         EXPECT_EQ(cost_ret, cost);
+
       }
     }
   }
